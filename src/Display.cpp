@@ -710,14 +710,14 @@ keyboard_rows( int layer )
         rows.push_back( split_blanks( "q w e r t z u i o p" ) );
         rows.push_back( split_blanks( "a s d f g h j k l" ) );
         rows.push_back( split_blanks( "SHIFT y x c v b n m BKSP" ) );
-        rows.push_back( split_blanks( "SYM , SPACE*5 . ENTER*2 HIDE" ) );
+        rows.push_back( split_blanks( "SYM , SPACE*4 . ENTER*3 HIDE" ) );
     }
     else
     {
         rows.push_back( split_blanks( "1 2 3 4 5 6 7 8 9 0 BKSP" ) );
         rows.push_back( split_blanks( "! @ # $ % ^ & * ( ) ~" ) );
         rows.push_back( split_blanks( "[ ] { } < > ` | \\ ? =" ) );
-        rows.push_back( split_blanks( "ABC + _ : ; \" ' . SPACE*2 ENTER*2" ) );
+        rows.push_back( split_blanks( "ABC + _ : ; \" ' . SPACE ENTER*3" ) ) ;
     }
 
     return rows;
@@ -733,6 +733,24 @@ void
 Display::build_keys( )
 {
     ExtraKeys::Rows rows = ExtraKeys::parse( m_bar_layout );
+
+    // Hide the extra Enter while the main keyboard provides one.
+    if ( m_onscreen_kbd && m_kbd_visible )
+    {
+        for ( std::size_t r = 0; r < rows.size( ); ++r )
+        {
+            std::vector< std::string > & row = rows[ r ];
+
+            for ( std::size_t c = 0; c < row.size( ); )
+            {
+                if ( row[ c ] == "ENTER"
+                     || row[ c ].compare( 0, 6, "ENTER*" ) == 0 )
+                    row.erase( row.begin( ) + c );
+                else
+                    ++c;
+            }
+        }
+    }
 
     if ( m_onscreen_kbd )
     {
