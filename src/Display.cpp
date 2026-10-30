@@ -549,7 +549,19 @@ Display::draw_row( int row,
             if ( mode == 1 )
                 SetFont( m_font, WHITE );
 
-            DrawString( x, y, txt.c_str( ) );
+            // Draw each character at its own cell position. The advance of
+            // the font isn't a whole number of pixels while the cell is, so
+            // a whole string drifts away from the cell grid
+
+            for ( int i = start; i < c; ++i )
+            {
+                if ( cells[ i ].ch == ' ' || cells[ i ].ch == 0 )
+                    continue;
+
+                std::string one;
+                append_utf8( one, cells[ i ].ch );
+                DrawString( X_MARGIN + i * m_cell_w, y, one.c_str( ) );
+            }
 
             if ( mode == 1 )
                 SetFont( m_font, BLACK );
