@@ -611,6 +611,18 @@ Term::input( std::string const & data )
                     line_move( +1 );
                 else if ( c == 'D' )
                     line_move( -1 );
+                else if ( c == 'H' )
+                {
+                    // HOME: move to the beginning of the command.
+                    while ( m_line_pos > 0 )
+                        line_move( -1 );
+                }
+                else if ( c == 'F' )
+                {
+                    // END: move to the end of the command.
+                    while ( m_line_pos < m_line.size( ) )
+                        line_move( +1 );
+                }
             }
 
             m_esc.clear( );
