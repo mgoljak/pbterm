@@ -144,7 +144,7 @@
 // Default layout of the extra keys row (rows separated by commas)
 
 #define DEFAULT_EXTRA_KEYS \
-    "ESC / - HOME UP END PGUP , TAB CTRL ALT LEFT DOWN RIGHT PGDN DEL ENTER"
+    "ESC / - HOME UP END PGUP , TAB CTRL | LEFT DOWN RIGHT PGDN DEL ENTER"
 
 
 // File to look for that contain commands put there by the user
