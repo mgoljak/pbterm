@@ -184,6 +184,12 @@ class Term
 
     std::size_t m_hist_pos;
 
+    // Cursor position in m_line, measured in UTF-8 bytes.
+    std::size_t m_line_pos;
+
+    void
+    line_move( int dir );
+
     void
     echo( std::string const & text );
 

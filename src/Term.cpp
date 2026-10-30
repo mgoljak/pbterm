@@ -62,6 +62,7 @@ Term::Term( Messenger & mess,
     , m_shell_pid( -1 )
     , m_hide_tty_msg( true )
     , m_hist_pos( 0 )
+    , m_line_pos( 0 )
     , m_write_fd( -1 )
     , m_read_fd( -1 )
     , m_logger( config.logger( ) )
@@ -238,41 +239,112 @@ Term::echo( std::string const & text )
 
 
 void
+Term::line_move( int dir )
+{
+    if ( dir < 0 )
+    {
+        if ( m_line_pos == 0 )
+            return;
+
+        --m_line_pos;
+        while ( m_line_pos > 0
+                && ( m_line[ m_line_pos ] & 0xC0 ) == 0x80 )
+            --m_line_pos;
+
+        echo( "\033[D" );
+    }
+    else
+    {
+        if ( m_line_pos >= m_line.size( ) )
+            return;
+
+        ++m_line_pos;
+        while ( m_line_pos < m_line.size( )
+                && ( m_line[ m_line_pos ] & 0xC0 ) == 0x80 )
+            ++m_line_pos;
+
+        echo( "\033[C" );
+    }
+}
+
+
+void
 Term::line_insert( std::string const & text )
 {
-    m_line += text;
-    echo( text );
+    m_line.insert( m_line_pos, text );
+    m_line_pos += text.size( );
+
+    // Redraw the suffix, then return to the insertion point.
+    std::string out = text + m_line.substr( m_line_pos );
+
+    for ( std::size_t i = m_line_pos; i < m_line.size( ); ++i )
+        if ( ( m_line[ i ] & 0xC0 ) != 0x80 )
+            out += "\033[D";
+
+    echo( out );
 }
 
 
 void
 Term::line_backspace( )
 {
-    if ( m_line.empty( ) )
+    if ( m_line_pos == 0 )
         return;
 
-    // Remove one UTF-8 character
+    std::size_t end = m_line_pos;
 
-    while ( ! m_line.empty( ) && ( m_line[ m_line.size( ) - 1 ] & 0xC0 ) == 0x80 )
-        m_line.erase( m_line.size( ) - 1 );
-    if ( ! m_line.empty( ) )
-        m_line.erase( m_line.size( ) - 1 );
+    --m_line_pos;
+    while ( m_line_pos > 0
+            && ( m_line[ m_line_pos ] & 0xC0 ) == 0x80 )
+        --m_line_pos;
 
-    echo( "\b \b" );
+    m_line.erase( m_line_pos, end - m_line_pos );
+
+    // Overwrite the removed character and redraw the suffix.
+    std::string out = "\033[D" + m_line.substr( m_line_pos ) + " ";
+    out += "\033[D";
+
+    for ( std::size_t i = m_line_pos; i < m_line.size( ); ++i )
+        if ( ( m_line[ i ] & 0xC0 ) != 0x80 )
+            out += "\033[D";
+
+    echo( out );
 }
 
 
 void
 Term::line_replace( std::string const & new_line )
 {
-    std::string erase;
+    // Move to the start of the editable command.
+    std::string out;
+
+    for ( std::size_t i = 0; i < m_line_pos; ++i )
+        if ( ( m_line[ i ] & 0xC0 ) != 0x80 )
+            out += "\033[D";
+
+    std::size_t old_chars = 0;
+    std::size_t new_chars = 0;
 
     for ( std::size_t i = 0; i < m_line.size( ); ++i )
         if ( ( m_line[ i ] & 0xC0 ) != 0x80 )
-            erase += "\b \b";
+            ++old_chars;
+
+    for ( std::size_t i = 0; i < new_line.size( ); ++i )
+        if ( ( new_line[ i ] & 0xC0 ) != 0x80 )
+            ++new_chars;
+
+    out += new_line;
+
+    // Clear any characters left over from the previous command.
+    for ( std::size_t i = new_chars; i < old_chars; ++i )
+        out += ' ';
+
+    for ( std::size_t i = new_chars; i < old_chars; ++i )
+        out += "\033[D";
 
     m_line = new_line;
-    echo( erase + m_line );
+    m_line_pos = m_line.size( );
+    echo( out );
 }
 
 
@@ -310,6 +382,7 @@ Term::line_submit( )
     std::string cmd( m_line );
 
     m_line.clear( );
+    m_line_pos = 0;
     echo( "\r\n" );
 
     if ( ! cmd.empty( ) )
@@ -325,6 +398,10 @@ Term::line_submit( )
 void
 Term::line_complete( )
 {
+    // Existing completion operates on the last word of the command.
+    while ( m_line_pos < m_line.size( ) )
+        line_move( +1 );
+
     static char const * const builtins[ ] = {
         "cd", "echo", "exit", "export", "pwd", "set", "unset", "alias",
         "exec", "eval", "kill", "read", "source", "type", "umask", "wait",
@@ -494,6 +571,10 @@ Term::input( std::string const & data )
                     line_history( -1 );
                 else if ( c == 'B' )
                     line_history( +1 );
+                else if ( c == 'C' )
+                    line_move( +1 );
+                else if ( c == 'D' )
+                    line_move( -1 );
             }
 
             m_esc.clear( );
@@ -520,6 +601,7 @@ Term::input( std::string const & data )
 
             case 0x03 :                             // ^C
                 m_line.clear( );
+                m_line_pos = 0;
                 m_hist_pos = m_commands.size( );
                 echo( "^C\r\n" );
                 if ( m_shell_pid > 0 && kill( - m_shell_pid, SIGINT ) == -1 )
