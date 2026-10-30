@@ -50,8 +50,11 @@ Menu_Handler::Menu_Handler( Messenger & mess,
                      { ITEM_SUBMENU, 0,           "User commands",  0 },
                      { ITEM_SUBMENU, 0,           "Send CTRL",      0 },
                      { ITEM_SUBMENU, 0,           "Keyboard",       0 },
+                     { ITEM_ACTIVE,  Menu_Select, "Select text",    0 },
+                     { ITEM_ACTIVE,  Menu_Paste,  "Paste",          0 },
                      { ITEM_ACTIVE,  Menu_Rotate, "Rotate",         0 },
                      { ITEM_ACTIVE,  Menu_Exit,   "Exit",           0 },
+                     { ITEM_ACTIVE,  Menu_Close,  "Close menu",     0 },
                      { 0,            0,           0,                0 } };
 
     for ( std::size_t i = 0; i < sizeof tmp / sizeof *tmp; ++i )
@@ -118,8 +121,19 @@ Menu_Handler::menu_handler( int index )
 
     switch ( index )
     {
+        case Menu_Select :
+            m_mess.send( message::Select_Start( ) );
+            break;
+
+        case Menu_Paste :
+            m_mess.send( message::Paste( ) );
+            break;
+
         case Menu_Rotate :
             m_mess.send( message::Show_Rotate_Box( ) );
+            break;
+
+        case Menu_Close :
             break;
 
         case Menu_Exit :

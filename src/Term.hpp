@@ -41,7 +41,9 @@ class Term
   public :
 
     Term( Messenger & mess,
-          Config    & config );
+          Config    & config,
+          int         cols,
+          int         rows );
 
 
     ~Term( );
@@ -57,6 +59,31 @@ class Term
 
     void
     send_control( char crtl );
+
+
+    // Keys typed by the user (on-screen keyboard, paste, extra keys). With
+    // a pty they are passed on as they are. Without one (pipes) there's no
+    // tty driver to echo, edit lines or kill jobs, so this does that: local
+    // echo, backspace, history (up/down), TAB completion of file and
+    // command names, ^C (SIGINT for the shell's process group), and the
+    // line is sent when ENTER is pressed.
+
+    void
+    input( std::string const & data );
+
+
+    // Sends raw bytes (e.g. cursor position reports from the emulator)
+
+    void
+    send_raw( std::string const & data );
+
+
+    // Tells the kernel the size of the terminal (SIGWINCH is sent to the
+    // foreground process group)
+
+    void
+    set_winsize( int cols,
+                 int rows );
 
 
     std::vector< std::string > const &
@@ -120,9 +147,72 @@ class Term
     Messenger & m_mess;
 
 
+    // Initial terminal size
+
+    int m_init_cols,
+        m_init_rows;
+
+
     // Time (in ms) between checks for shell output
 
     int m_check_interval;
+
+
+    // While > 0 the shell is polled much more often than 'm_check_interval'
+    // (after sending something to it or after output arrived), so replies
+    // to terminal queries like "ESC [ 6 n" arrive in time for e.g. vi
+
+    int m_fast_ticks;
+
+
+    // Number of bytes still to be written to the log by trace()
+
+    int m_trace_left;
+
+
+    // Shell process, and the state of the line editor used with pipes
+
+    pid_t m_shell_pid;
+
+    // The start-up complaint of ash about the missing tty is removed once
+
+    bool m_hide_tty_msg;
+
+    std::string m_line,
+                m_saved_line,
+                m_esc;
+
+    std::size_t m_hist_pos;
+
+    void
+    echo( std::string const & text );
+
+    void
+    line_submit( );
+
+    void
+    line_backspace( );
+
+    void
+    line_replace( std::string const & new_line );
+
+    void
+    line_history( int dir );
+
+    void
+    line_complete( );
+
+    void
+    line_insert( std::string const & text );
+
+
+    // Writes the bytes exchanged with the shell to the log in readable
+    // form ("<" from shell, ">" to shell), limited to a few KB per run
+
+    void
+    trace( char         dir,
+           char const * data,
+           int          len );
 
 
     // File descriptors for reading and writing to the child running the shell.

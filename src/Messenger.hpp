@@ -123,6 +123,10 @@ class Messenger
 
     Pointer_Handler * m_pointer_handler;
 
+    // Text copied from the screen
+
+    std::string m_clipboard;
+
 
     Rotation_Handler * m_rotation_handler;
 

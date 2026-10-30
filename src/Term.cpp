@@ -25,9 +25,16 @@
 #include "Utils.hpp"
 #include "Defaults.hpp"
 #include <cerrno>
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <unistd.h>
 #include <termios.h>
+#include <signal.h>
+#include <dirent.h>
+#include <set>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 
 
@@ -43,9 +50,18 @@ Term * Term::s_handling_term;
  ******************************************/
 
 Term::Term( Messenger & mess,
-            Config    & config )
+            Config    & config,
+            int         cols,
+            int         rows )
     : m_mess( mess )
+    , m_init_cols( cols )
+    , m_init_rows( rows )
     , m_check_interval( config.check_interval( ) )
+    , m_fast_ticks( 0 )
+    , m_trace_left( 16384 )
+    , m_shell_pid( -1 )
+    , m_hide_tty_msg( true )
+    , m_hist_pos( 0 )
     , m_write_fd( -1 )
     , m_read_fd( -1 )
     , m_logger( config.logger( ) )
@@ -56,7 +72,7 @@ Term::Term( Messenger & mess,
 
     // Start the shell, abort on any failures
 
-    if ( start_shell( config.shell( ) ) <= 0 )
+    if ( ( m_shell_pid = start_shell( config.shell( ) ) ) <= 0 )
     {
         m_mess.send( message::Close( ) );
         return;
@@ -65,6 +81,7 @@ Term::Term( Messenger & mess,
     // Read in the file with the command history
 
     read_cmd_file( );
+    m_hist_pos = m_commands.size( );
 
     // Start looking for messages from the shell
 
@@ -171,6 +188,393 @@ Term::send_control( char ctrl )
 
 
 /******************************************
+ * Logs bytes in a readable form, e.g. ESC [ 6 n as \\e[6n
+ ******************************************/
+
+void
+Term::trace( char         dir,
+             char const * data,
+             int          len )
+{
+    if ( m_trace_left <= 0 )
+        return;
+
+    std::string out;
+    char buf[ 8 ];
+
+    for ( int i = 0; i < len; ++i )
+    {
+        unsigned char c = static_cast< unsigned char >( data[ i ] );
+
+        if ( c == 0x1B )
+            out += "\\e";
+        else if ( c == '\n' )
+            out += "\\n";
+        else if ( c == '\r' )
+            out += "\\r";
+        else if ( c < 0x20 || c >= 0x7F )
+        {
+            snprintf( buf, sizeof buf, "\\x%02x", c );
+            out += buf;
+        }
+        else
+            out += static_cast< char >( c );
+    }
+
+    m_trace_left -= len;
+    m_logger.info( ) << "io " << dir << " " << out << std::endl;
+}
+
+
+/******************************************
+ * Line editor used when there is no pty
+ ******************************************/
+
+void
+Term::echo( std::string const & text )
+{
+    m_mess.send( message::New_Text( text ) );
+}
+
+
+void
+Term::line_insert( std::string const & text )
+{
+    m_line += text;
+    echo( text );
+}
+
+
+void
+Term::line_backspace( )
+{
+    if ( m_line.empty( ) )
+        return;
+
+    // Remove one UTF-8 character
+
+    while ( ! m_line.empty( ) && ( m_line[ m_line.size( ) - 1 ] & 0xC0 ) == 0x80 )
+        m_line.erase( m_line.size( ) - 1 );
+    if ( ! m_line.empty( ) )
+        m_line.erase( m_line.size( ) - 1 );
+
+    echo( "\b \b" );
+}
+
+
+void
+Term::line_replace( std::string const & new_line )
+{
+    std::string erase;
+
+    for ( std::size_t i = 0; i < m_line.size( ); ++i )
+        if ( ( m_line[ i ] & 0xC0 ) != 0x80 )
+            erase += "\b \b";
+
+    m_line = new_line;
+    echo( erase + m_line );
+}
+
+
+void
+Term::line_history( int dir )
+{
+    if ( m_commands.empty( ) )
+        return;
+
+    if ( m_hist_pos > m_commands.size( ) )
+        m_hist_pos = m_commands.size( );
+
+    if ( dir < 0 )
+    {
+        if ( m_hist_pos == 0 )
+            return;
+        if ( m_hist_pos == m_commands.size( ) )
+            m_saved_line = m_line;
+        line_replace( m_commands[ -- m_hist_pos ] );
+    }
+    else
+    {
+        if ( m_hist_pos >= m_commands.size( ) )
+            return;
+        ++m_hist_pos;
+        line_replace( m_hist_pos == m_commands.size( ) ? m_saved_line
+                                                      : m_commands[ m_hist_pos ] );
+    }
+}
+
+
+void
+Term::line_submit( )
+{
+    std::string cmd( m_line );
+
+    m_line.clear( );
+    echo( "\r\n" );
+
+    if ( ! cmd.empty( ) )
+        save_command( cmd );
+    m_hist_pos = m_commands.size( );
+    m_saved_line.clear( );
+
+    cmd += '\n';
+    send( cmd.c_str( ), cmd.size( ) );
+}
+
+
+void
+Term::line_complete( )
+{
+    static char const * const builtins[ ] = {
+        "cd", "echo", "exit", "export", "pwd", "set", "unset", "alias",
+        "exec", "eval", "kill", "read", "source", "type", "umask", "wait",
+        "trap", "test", "printf", "history", "jobs", "fg", "bg", 0 };
+
+    std::size_t sp = m_line.find_last_of( ' ' );
+    bool first = sp == std::string::npos;
+    std::string word = first ? m_line : m_line.substr( sp + 1 ),
+                dir_part,
+                base = word;
+
+    std::size_t sl = word.rfind( '/' );
+    if ( sl != std::string::npos )
+    {
+        dir_part = word.substr( 0, sl + 1 );
+        base     = word.substr( sl + 1 );
+    }
+
+    // Directory of the shell is where relative names are looked up
+
+    char buf[ 1024 ];
+    std::string cwd;
+    snprintf( buf, sizeof buf, "/proc/%d/cwd", static_cast< int >( m_shell_pid ) );
+    ssize_t n = readlink( buf, buf, sizeof buf - 1 );
+    if ( n > 0 )
+        cwd.assign( buf, n );
+    else if ( getcwd( buf, sizeof buf ) )
+        cwd = buf;
+
+    std::string dir;
+    if ( dir_part.empty( ) )
+        dir = cwd;
+    else if ( dir_part[ 0 ] == '/' )
+        dir = dir_part;
+    else if ( dir_part[ 0 ] == '~' && getenv( "HOME" ) )
+        dir = std::string( getenv( "HOME" ) ) + dir_part.substr( 1 );
+    else
+        dir = cwd + "/" + dir_part;
+
+    std::set< std::string > cands;
+
+    if ( DIR * d = opendir( dir.c_str( ) ) )
+    {
+        while ( struct dirent * e = readdir( d ) )
+        {
+            std::string name( e->d_name );
+
+            if ( name == "." || name == ".." )
+                continue;
+            if ( name[ 0 ] == '.' && ( base.empty( ) || base[ 0 ] != '.' ) )
+                continue;
+            if ( name.compare( 0, base.size( ), base ) != 0 )
+                continue;
+
+            struct stat st;
+            bool is_dir =    stat( ( dir + "/" + name ).c_str( ), &st ) == 0
+                          && S_ISDIR( st.st_mode );
+            cands.insert( is_dir ? name + "/" : name );
+        }
+        closedir( d );
+    }
+
+    // A command name: also look through the builtins and $PATH
+
+    if ( first && dir_part.empty( ) && ! base.empty( ) )
+    {
+        for ( int i = 0; builtins[ i ]; ++i )
+            if ( std::string( builtins[ i ] ).compare( 0, base.size( ), base ) == 0 )
+                cands.insert( builtins[ i ] );
+
+        char const * path = getenv( "PATH" );
+        std::string p( path ? path : "/bin:/usr/bin:/sbin:/usr/sbin" );
+
+        for ( std::size_t pos = 0; pos <= p.size( ); )
+        {
+            std::size_t e = p.find( ':', pos );
+            if ( e == std::string::npos )
+                e = p.size( );
+
+            std::string pd = p.substr( pos, e - pos );
+            pos = e + 1;
+
+            if ( DIR * d = opendir( pd.c_str( ) ) )
+            {
+                while ( struct dirent * de = readdir( d ) )
+                {
+                    std::string name( de->d_name );
+                    if (    name.compare( 0, base.size( ), base ) == 0
+                         && access( ( pd + "/" + name ).c_str( ), X_OK ) == 0 )
+                        cands.insert( name );
+                }
+                closedir( d );
+            }
+        }
+    }
+
+    if ( cands.empty( ) )
+        return;
+
+    if ( cands.size( ) == 1 )
+    {
+        std::string c = *cands.begin( );
+        line_insert( c.substr( base.size( ) )
+                     + ( c[ c.size( ) - 1 ] == '/' ? "" : " " ) );
+        return;
+    }
+
+    // Several candidates: complete the common part, if there's none show
+    // the list
+
+    std::string common = *cands.begin( );
+
+    for ( std::set< std::string >::const_iterator it = cands.begin( );
+          it != cands.end( ); ++it )
+    {
+        std::size_t i = 0;
+        while ( i < common.size( ) && i < it->size( ) && common[ i ] == ( *it )[ i ] )
+            ++i;
+        common.erase( i );
+    }
+
+    if ( common.size( ) > base.size( ) )
+    {
+        line_insert( common.substr( base.size( ) ) );
+        return;
+    }
+
+    std::string list( "\r\n" );
+    for ( std::set< std::string >::const_iterator it = cands.begin( );
+          it != cands.end( ); ++it )
+        list += *it + "  ";
+    echo( list + "\r\n" + m_line );
+}
+
+
+void
+Term::input( std::string const & data )
+{
+    if ( using_pty( ) )
+    {
+        send_raw( data );
+        return;
+    }
+
+    for ( std::size_t i = 0; i < data.size( ); ++i )
+    {
+        unsigned char c = static_cast< unsigned char >( data[ i ] );
+
+        // Escape sequences (arrow keys etc.)
+
+        if ( ! m_esc.empty( ) || c == 0x1B )
+        {
+            m_esc += static_cast< char >( c );
+
+            if ( m_esc.size( ) == 1 )
+                continue;
+
+            if ( m_esc.size( ) == 2 && ( c == '[' || c == 'O' ) )
+                continue;
+
+            if ( m_esc.size( ) > 2 && ! ( c >= 0x40 && c <= 0x7E ) )
+                continue;                           // parameters
+
+            if ( m_esc.size( ) > 2 && m_esc[ 1 ] != ';' )
+            {
+                if ( c == 'A' )
+                    line_history( -1 );
+                else if ( c == 'B' )
+                    line_history( +1 );
+            }
+
+            m_esc.clear( );
+            continue;
+        }
+
+        switch ( c )
+        {
+            case '\r' : case '\n' :
+                line_submit( );
+                break;
+
+            case 0x7F : case 0x08 :
+                line_backspace( );
+                break;
+
+            case 0x15 :                             // ^U
+                line_replace( "" );
+                break;
+
+            case '\t' :
+                line_complete( );
+                break;
+
+            case 0x03 :                             // ^C
+                m_line.clear( );
+                m_hist_pos = m_commands.size( );
+                echo( "^C\r\n" );
+                if ( m_shell_pid > 0 && kill( - m_shell_pid, SIGINT ) == -1 )
+                    m_logger.error( ) << "kill() failed: "
+                                      << strerror( errno ) << std::endl;
+                break;
+
+            default :
+                if ( c >= 0x20 )
+                    line_insert( std::string( 1, static_cast< char >( c ) ) );
+                break;
+        }
+    }
+
+    // Keys arrive as complete sequences, so a lone ESC is just that
+
+    m_esc.clear( );
+}
+
+
+/******************************************
+ * Sends a string of raw bytes to the shell
+ ******************************************/
+
+void
+Term::send_raw( std::string const & data )
+{
+    if ( ! data.empty( ) )
+        send( data.data( ), data.size( ) );
+}
+
+
+/******************************************
+ * Sets the window size of the pseudoterminal
+ ******************************************/
+
+void
+Term::set_winsize( int cols,
+                   int rows )
+{
+    if ( ! using_pty( ) || m_write_fd < 0 )
+        return;
+
+    struct winsize ws;
+    ws.ws_col = cols;
+    ws.ws_row = rows;
+    ws.ws_xpixel = ws.ws_ypixel = 0;
+
+    if ( ioctl( m_write_fd, TIOCSWINSZ, &ws ) == -1 )
+        m_logger.error( ) << "ioctl() with TIOCSWINSZ failed: "
+                          << strerror( errno ) << std::endl;
+}
+
+
+/******************************************
  * Helper function that does the actual sending
  ******************************************/
 
@@ -179,6 +583,13 @@ Term::send( char const * data,
             int          len )
 {
     int cnt = 0;
+
+    trace( '>', data, len );
+
+    // Something is sent, so an answer is to be expected soon
+
+    m_fast_ticks = 200;
+    SetWeakTimer( APP_NAME "_timer", &Term::static_timer_handler, 10 );
 
     while ( ( len -= cnt ) > 0 )
     {
@@ -239,13 +650,41 @@ Term::timer_handler( )
         // Pass on any new text to the display and, if recording is on,
         // write it to the log file
 
-        m_mess.send( message::New_Text( txt ) );
+        // Without a pty ash always says it can't do job control: drop it
+
+        if ( m_hide_tty_msg )
+        {
+            std::size_t p = txt.find( "can't access tty; job control turned off" );
+
+            if ( p != std::string::npos )
+            {
+                std::size_t b = txt.rfind( '\n', p ),
+                            e = txt.find( '\n', p );
+
+                txt.erase( b == std::string::npos ? 0 : b + 1,
+                           ( e == std::string::npos ? txt.size( ) : e + 1 )
+                           - ( b == std::string::npos ? 0 : b + 1 ) );
+                m_hide_tty_msg = false;
+            }
+        }
+
+        m_fast_ticks = std::max( m_fast_ticks, 50 );
+        if ( ! txt.empty( ) )
+            m_mess.send( message::New_Text( txt ) );
     }
 
-    // (Re)start the timer that gets us back here for more
+    // (Re)start the timer that gets us back here for more, poll fast
+    // while there is activity
 
-    SetWeakTimer( APP_NAME "_timer", &Term::static_timer_handler,
-                  m_check_interval );
+    int interval = m_check_interval;
+
+    if ( m_fast_ticks > 0 )
+    {
+        --m_fast_ticks;
+        interval = std::min( interval, 10 );
+    }
+
+    SetWeakTimer( APP_NAME "_timer", &Term::static_timer_handler, interval );
 }
 
 
@@ -334,6 +773,10 @@ Term::start_shell( std::string const & shell )
     if ( m_write_fd == -2 )
         return start_piped_shell( shell );
 
+    // Let the shell see the real terminal size from the start
+
+    set_winsize( m_init_cols, m_init_rows );
+
     // Now that we have the master and the slave name (or a set of pipes)
     // we can start the child process
 
@@ -370,12 +813,37 @@ Term::open_master_pty( std::string & slave_name )
     // to avoid having to call select() or poll() each time we check for
     // new data from the shell.
 
-    if ( ( fd = posix_openpt( O_RDWR | O_NOCTTY | O_NONBLOCK ) ) == -1 )
+    fd = posix_openpt( O_RDWR | O_NOCTTY | O_NONBLOCK );
+
+    // Some systems only allow a private devpts instance's ptmx
+
+    if ( fd == -1 && errno == EACCES )
+    {
+        int first_errno = errno;
+        struct stat st;
+
+        m_logger.info( ) << "posix_openpt() failed: " << strerror( first_errno )
+                         << " (euid " << geteuid( ) << ")";
+        if ( stat( "/dev/ptmx", &st ) == 0 )
+            m_logger.info( ) << ", /dev/ptmx mode " << std::oct << st.st_mode
+                             << std::dec << " uid " << st.st_uid
+                             << " gid " << st.st_gid;
+        m_logger.info( ) << std::endl;
+
+        fd = open( "/dev/pts/ptmx", O_RDWR | O_NOCTTY | O_NONBLOCK );
+
+        if ( fd == -1 )
+            m_logger.info( ) << "open( /dev/pts/ptmx ) failed too: "
+                             << strerror( errno ) << std::endl;
+        errno = fd == -1 ? first_errno : 0;
+    }
+
+    if ( fd == -1 )
     {
         if ( errno == EACCES )
         {
-            m_logger.info( ) <<  "posix_openpt() failed due to permission "
-                             << "issues, trying to use pipes" << std::endl;
+            m_logger.info( ) <<  "No pty available, using pipes (with a "
+                             << "built-in line editor)" << std::endl;
             return -2;
         }
 
@@ -418,30 +886,8 @@ Term::open_master_pty( std::string & slave_name )
 
     slave_name = sn;
 
-    // Switch off echoing, otherwise we would read back everything we're
-    // sending to the pseudoterminal. And we don't want a carriage added
-    // to each newline we receive.
-
-    struct termios tp;
-
-    if ( tcgetattr( fd, &tp ) == -1 )
-    {
-        m_logger.error( ) << "tcgetattr() failed: "
-                          << strerror( errno ) << std::endl;
-        close( fd );
-        return -1;
-    }
-
-    tp.c_lflag &= ~ ECHO;
-    tp.c_oflag &= ~ ONLCR;
-
-    if ( tcsetattr( fd, TCSANOW, &tp ) == -1 )
-    {
-        m_logger.error( ) << "tcsetattr() failed: "
-                          << strerror( errno ) << std::endl;
-        close( fd );
-        return -1;
-    }
+    // The tty keeps its default settings (echo on, NL -> CR NL): the
+    // terminal emulator expects a "real" terminal.
 
     return fd;
 }
@@ -504,6 +950,13 @@ Term::setup_child( std::string const & slave_name,
 
     for ( int i = STDERR_FILENO + 1; i < getdtablesize( ); i++ )
         close( i );
+
+    // Tell programs what kind of terminal they are talking to
+
+    setenv( "TERM", "xterm-256color", 1 );
+
+    if ( ! access( "/mnt/ext1/system/share/pbterm/terminfo", R_OK ) )
+        setenv( "TERMINFO", "/mnt/ext1/system/share/pbterm/terminfo", 1 );
 
     // Finally replace the process by the shell
 
@@ -580,6 +1033,17 @@ Term::start_piped_shell( std::string const & shell )
         for ( int i = STDERR_FILENO + 1; i < getdtablesize( ); i++ )
             close( i );
 
+        setenv( "TERM", "xterm", 1 );
+
+        // No TIOCGWINSZ without a tty: programs like vi take the size from
+        // these variables
+
+        char num[ 16 ];
+        snprintf( num, sizeof num, "%d", m_init_cols );
+        setenv( "COLUMNS", num, 1 );
+        snprintf( num, sizeof num, "%d", m_init_rows );
+        setenv( "LINES", num, 1 );
+
         // Start the shell, replacing the child process
 
         execlp( shell.c_str( ), shell.c_str( ), "-i", NULL );
@@ -635,8 +1099,8 @@ Term::get_shell_output( std::string & reply )
         if ( retval <= 0 )
             return errno == EAGAIN || errno == EWOULDBLOCK ? cnt : -1;
 
-        tmp_buffer[ retval ] = '\0';
-        reply += tmp_buffer;
+        reply.append( tmp_buffer, retval );
+        trace( '<', tmp_buffer, retval );
         cnt   += retval;
     } while ( retval == buffer_len );
 

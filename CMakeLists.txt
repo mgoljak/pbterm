@@ -115,6 +115,8 @@ SET (SRC_LIST
     ${CMAKE_SOURCE_DIR}/src/Rotation_Handler.cpp
     ${CMAKE_SOURCE_DIR}/src/Submenu.cpp
 #	${CMAKE_SOURCE_DIR}/src/Dir_Select_Handler.cpp
+    ${CMAKE_SOURCE_DIR}/src/Vt.cpp
+    ${CMAKE_SOURCE_DIR}/src/ExtraKeys.cpp
     ${CMAKE_SOURCE_DIR}/src/Utils.cpp)
 
 ADD_EXECUTABLE (pbterm.app

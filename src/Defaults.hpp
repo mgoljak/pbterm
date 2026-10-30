@@ -141,6 +141,12 @@
 #define KEYBOARD_FILE "/mnt/ext1/system/share/pbterm/pbterm.kbd"
 
 
+// Default layout of the extra keys row (rows separated by commas)
+
+#define DEFAULT_EXTRA_KEYS \
+    "ESC / - HOME UP END PGUP , TAB CTRL ALT LEFT DOWN RIGHT PGDN ENTER"
+
+
 // File to look for that contain commands put there by the user
 
 #define USER_CMD_FILE "/mnt/ext1/system/share/pbterm/user.cmd"

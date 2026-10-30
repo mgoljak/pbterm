@@ -38,6 +38,8 @@ Config::Config( Logger & logger )
     , m_font_name(           DEFAULTFONTM              )
     , m_default_font_size(   DEFAULT_FONT_SIZE         )
     , m_font_step(           FONT_STEP                 )
+    , m_live_input(          1                         )
+    , m_onscreen_kbd(        1                         )
     , m_line_spacing(        LINE_SPACING              )
     , m_tab_width(           TAB_WIDTH                 )
     , m_max_history(         DEFAULT_MAX_CMD_HISTORY   )
@@ -47,6 +49,7 @@ Config::Config( Logger & logger )
     , m_log_file(            DEFAULT_LOG_FILE          )
     , m_keyboard_file(       KEYBOARD_FILE             ) 
     , m_user_cmd_file(       USER_CMD_FILE             )
+    , m_extra_keys(          DEFAULT_EXTRA_KEYS        )
 {
     // Try to read in the configuration file
 
@@ -58,6 +61,7 @@ Config::Config( Logger & logger )
     checked_cmd_file( );
     checked_keyboard_file( );
     checked_user_cmd_file( );
+    checked_extra_keys( );
 
     // Check for integer settings from the configuration file
 
@@ -65,6 +69,37 @@ Config::Config( Logger & logger )
     checked_int( "check_interval", 50, 10000, m_check_interval );
     checked_int( "font_size", 6, 72, m_default_font_size );
     checked_int( "font_step", 1, 10, m_font_step );
+    checked_int( "live_input", 0, 1, m_live_input );
+    checked_int( "onscreen_keyboard", 0, 1, m_onscreen_kbd );
+
+    // Without an ENTER key live input would leave no way to run a command,
+    // so make sure there is one (and fall back to the old behaviour if the
+    // extra keys are switched off)
+
+    if ( m_live_input )
+    {
+        bool has_enter = false;
+        std::string tok,
+                    l( m_extra_keys + " " );
+
+        for ( std::size_t i = 0; i < l.size( ); ++i )
+            if ( l[ i ] == ' ' || l[ i ] == ',' || l[ i ] == '\t' )
+            {
+                if ( tok == "ENTER" )
+                    has_enter = true;
+                tok.clear( );
+            }
+            else
+                tok += l[ i ];
+
+        if ( ! has_enter )
+        {
+            if ( m_extra_keys.empty( ) )
+                m_live_input = 0;
+            else
+                m_extra_keys += " ENTER";
+        }
+    }
     checked_int( "line_spacing", - m_default_font_size, 100,
                  m_line_spacing );
     checked_int( "tab_width", 2, 8, m_tab_width );
@@ -210,6 +245,21 @@ Config::checked_keyboard_file( )
 
     m_keyboard_file = get_cleaned_string( "keyboard_file" );
     m_cfg.erase( "keyboard_file" );
+}
+
+
+/******************************************
+ * An empty value switches the extra keys row off
+ ******************************************/
+
+void
+Config::checked_extra_keys( )
+{
+    if ( m_cfg.find( "extra_keys" ) == m_cfg.end( ) )
+        return;
+
+    m_extra_keys = get_cleaned_string( "extra_keys" );
+    m_cfg.erase( "extra_keys" );
 }
 
 

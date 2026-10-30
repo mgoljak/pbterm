@@ -92,8 +92,11 @@ class Menu_Handler
         Menu_User_Cmd,
         Menu_Send_Ctrl,
         Menu_Keyboard,
+        Menu_Select,
+        Menu_Paste,
         Menu_Rotate,
         Menu_Exit,
+        Menu_Close,
         Menu_First_Unused
     };
 

@@ -67,6 +67,11 @@ Pointer_Handler::handle_pointer_down( int x,
     if ( m_pointer_is_down )
         return 0;
 
+    // We only get pointer events when no keyboard or menu is open, so make
+    // sure the screen isn't left in "suspended" state by mistake
+
+    m_mess.send( message::Suspend_Display( false ) );
+
     m_pointer_is_down = true;
     m_in_pinch = false;
     m_start_x = x;
@@ -88,6 +93,20 @@ Pointer_Handler::handle_pointer_long( int x,
 {
     if ( ! m_pointer_is_down || m_in_pinch )
         return 0;
+
+    // No long-press menu on the extra keys, the pointer-up is a normal tap
+
+    if ( m_start_y >= m_bar_top )
+        return 1;
+
+    // A long press while selecting text cancels the selection
+
+    if ( m_selecting )
+    {
+        m_pointer_is_down = false;
+        m_mess.send( message::Select_Cancel( ) );
+        return 1;
+    }
 
     m_max_excursion = max_excursion( x, y );
 
@@ -201,6 +220,26 @@ Pointer_Handler::handle_pointer_up( int x,
 
    m_max_excursion = max_excursion( x, y );
 
+    // Taps on the extra keys never do anything else
+
+    if ( m_start_y >= m_bar_top )
+    {
+        if ( m_max_excursion <= MAX_EXCURSION )
+            m_mess.send( message::Extra_Key_Tap( m_start_x, m_start_y ) );
+        return 1;
+    }
+
+    // While selecting text a tap marks the start or the end of the text
+
+    if ( m_selecting )
+    {
+        if ( m_max_excursion <= MAX_EXCURSION )
+            m_mess.send( message::Select_Tap( m_start_x, m_start_y ) );
+        else
+            m_mess.send( message::Select_Drag( m_start_x, m_start_y, x, y ) );
+        return 1;
+    }
+
     // If the excursion wasn't too large treat it as a tap and either show
     // the keyboard or toggle recording (if the tap was in the upper right
     // hand corner) or close the program (if the tap was in the upper left
@@ -218,7 +257,7 @@ Pointer_Handler::handle_pointer_up( int x,
                   && m_start_y >= 3 * m_display_height / 4 )
             m_mess.send( message::Show_Menu( m_start_x, m_start_y ) );
         else
-            m_mess.send( message::Show_Keyboard( ) );
+            m_mess.send( message::Screen_Tap( ) );
     }
     else
         m_mess.send( message::Shift_Display( y - m_start_y ) );

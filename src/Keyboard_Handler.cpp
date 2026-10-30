@@ -40,6 +40,8 @@ Keyboard_Handler::Keyboard_Handler( Messenger & mess,
                                     Config    & config )
     : m_mess( mess )
     , m_keyboard_is_shown( false )
+    , m_live( config.live_input( ) )
+    , m_replace( false )
     , m_kbd_file( config.keyboard_file( ) )
     , m_use_custom(    ! m_kbd_file.empty( )
                     && ! access( m_kbd_file.c_str( ), R_OK ) )
@@ -53,10 +55,13 @@ Keyboard_Handler::Keyboard_Handler( Messenger & mess,
  ******************************************/
 
 void
-Keyboard_Handler::show( std::string const & default_command )
+Keyboard_Handler::show( std::string const & default_command,
+                        bool                 replace_line )
 {
     if ( m_keyboard_is_shown )
         return;
+
+    m_replace = replace_line;
 
     // Set up the buffer with the default command (make sure the buffer
     // doesn't overflow, e.g. because the user manually modified the
@@ -147,6 +152,17 @@ Keyboard_Handler::kbd_handler( char * cmd )
 
     if ( ! cmd )
         return;
+
+    // In "live" mode the text goes to the command line as it is (blanks
+    // at the end matter for completion), the user presses ENTER later
+
+    if ( m_live )
+    {
+        std::string t( cmd );
+        if ( ! t.empty( ) )
+            m_mess.send( message::Raw_Input( t, m_replace ) );
+        return;
+    }
 
     // If there's at least one non-white-space character in the input send
     // it to the messenger after attaching a newline characters (as we would

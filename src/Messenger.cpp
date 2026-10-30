@@ -73,16 +73,19 @@ Messenger::Messenger( )
 
     // Prepare the terminal dealing with the shell
 
-    m_term = new Term( *this, config );
+    m_term = new Term( *this, config, m_display->cols( ), m_display->rows( ) );
 
     if ( m_is_shutting_down )
         return;
+
+    m_display->set_pty_mode( m_term->using_pty( ) );
 
     // Create subsystems for handling button and pointer events and for
     // dealing with the on-screen keyboard, menu and orientation selector.
 
     m_button_handler  = new Button_Handler( *this, config );
     m_pointer_handler = new Pointer_Handler( *this, config );
+    m_pointer_handler->set_bar_top( m_display->bar_top( ) );
 
     m_kbd_handler      = new Keyboard_Handler( *this, config );
     m_menu_handler     = new Menu_Handler( *this, config );
@@ -136,6 +139,16 @@ Messenger::send< message::New_Text >( message::New_Text const & mess )
         *m_logger << mess.text;
 
     m_display->add_text( mess.text );
+
+    // Answer queries (cursor position etc.) the emulator received
+
+    // Answers go to the shell only when it has a tty (otherwise they'd show
+    // up as keys typed)
+
+    std::string reply( m_display->take_reply( ) );
+
+    if ( m_term && m_term->using_pty( ) )
+        m_term->send_raw( reply );
 }
 
 
@@ -148,10 +161,57 @@ template < >
 void
 Messenger::send< message::New_Command >( message::New_Command const & mess )
 {
+    m_display->scroll_to_bottom( );
+
+    // CTRL or ALT was armed on the extra keys: the text typed is not a
+    // command but the key to be modified (e.g. "c" gives ^C), no Enter
+
+    if ( m_display->extra_keys_armed( ) )
+    {
+        std::string t( mess.cmd );
+        if ( ! t.empty( ) && t[ t.size( ) - 1 ] == '\n' )
+            t.erase( t.size( ) - 1 );
+        m_term->send_raw( m_display->apply_modifiers( t ) );
+        return;
+    }
+
     m_term->send_command( mess.cmd );
-    m_display->add_text( mess.cmd );
-    if ( m_is_recording )
-        *m_logger << mess.cmd;
+
+    // With a pty the tty driver echoes the command, with pipes we must do it
+
+    if ( ! m_term->using_pty( ) )
+    {
+        m_display->add_text( mess.cmd );
+        if ( m_is_recording )
+            *m_logger << mess.cmd;
+    }
+}
+
+
+/******************************************
+ * Receives the "Extra Key Tap" message, sent when one of the extra keys
+ * at the bottom of the screen was tapped
+ ******************************************/
+
+template < >
+void
+Messenger::send< message::Extra_Key_Tap >( message::Extra_Key_Tap const & mess )
+{
+    std::string bytes( m_display->extra_key_tap( mess.x, mess.y ) );
+
+    // Showing, hiding or changing the keyboard changes the terminal size
+
+    if ( m_display->take_geometry_changed( ) )
+    {
+        m_term->set_winsize( m_display->cols( ), m_display->rows( ) );
+        m_pointer_handler->set_bar_top( m_display->bar_top( ) );
+    }
+
+    if ( ! bytes.empty( ) )
+    {
+        m_display->scroll_to_bottom( );
+        m_term->input( bytes );
+    }
 }
 
 
@@ -170,17 +230,12 @@ Messenger::send< message::New_Ctrl_Char >( message::New_Ctrl_Char const & mess )
          || mess.ctrl[ 1 ] > '[' )
         return;
 
-    m_term->send_control( mess.ctrl[ 1 ] - 'A' + 1 );
+    // Without a pty ^C and friends are handled by the line editor
 
-    // A "^C" is normally shown on terminals
-
-    if ( mess.ctrl[ 1 ] == 'C' )
-    {
-        m_display->add_text( mess.ctrl );
-
-        if ( m_is_recording )
-            *m_logger << mess.ctrl;
-    }
+    if ( m_term->using_pty( ) )
+        m_term->send_control( mess.ctrl[ 1 ] - 'A' + 1 );
+    else
+        m_term->input( std::string( 1, static_cast< char >( mess.ctrl[ 1 ] - 'A' + 1 ) ) );
 }
 
 
@@ -226,6 +281,7 @@ Messenger::send< message::Change_Font_Size >(
                                        message::Change_Font_Size const & mess )
 {
     m_display->change_font_size( mess.difference * m_font_step );
+    m_term->set_winsize( m_display->cols( ), m_display->rows( ) );
 }
 
 
@@ -256,8 +312,10 @@ Messenger::send< message::Set_Orientation >(
                                         message::Set_Orientation const & mess )
 {
     m_display->rotate( mess.dir );
+    m_term->set_winsize( m_display->cols( ), m_display->rows( ) );
     m_pointer_handler->display_size_change( ScreenWidth( ),
                                             ScreenHeight( ) );
+    m_pointer_handler->set_bar_top( m_display->bar_top( ) );
     m_button_handler->orientation_change( GetOrientation( ) );
 }
 
@@ -284,8 +342,132 @@ template < >
 void
 Messenger::send< message::Show_Keyboard >( message::Show_Keyboard const & mess )
 {
-    m_kbd_handler->show( mess.txt.empty( ) ?
-                         m_term->last_command( ) : mess.txt );
+    // In "live" mode the keyboard starts empty (the text is put on the
+    // shell's command line, which has its own history), a text handed
+    // in explicitly (from the menu) replaces the current command line
+
+    if ( mess.txt.empty( ) )
+        m_kbd_handler->show( m_kbd_handler->live( ) ? std::string( )
+                                           : m_term->last_command( ) );
+    else
+        m_kbd_handler->show( mess.txt, m_kbd_handler->live( ) );
+}
+
+
+/******************************************
+ * Receives text typed on the keyboard that goes to the command line
+ ******************************************/
+
+template < >
+void
+Messenger::send< message::Raw_Input >( message::Raw_Input const & mess )
+{
+    m_display->scroll_to_bottom( );
+
+    if ( m_display->extra_keys_armed( ) )
+        m_term->input( m_display->apply_modifiers( mess.text ) );
+    else
+        m_term->input( ( mess.replace ? "\x15" : "" ) + mess.text );
+}
+
+
+/******************************************
+ * Selecting text, copying and pasting
+ ******************************************/
+
+/******************************************
+ * A tap on the terminal: brings up the on-screen keyboard if it's hidden,
+ * or the system's keyboard box if on-screen keyboard is switched off
+ ******************************************/
+
+template < >
+void
+Messenger::send< message::Screen_Tap >( message::Screen_Tap const & )
+{
+    if ( ! m_display->onscreen_keyboard( ) )
+    {
+        send( message::Show_Keyboard( ) );
+        return;
+    }
+
+    if ( m_display->show_screen_keyboard( ) )
+    {
+        m_term->set_winsize( m_display->cols( ), m_display->rows( ) );
+        m_pointer_handler->set_bar_top( m_display->bar_top( ) );
+    }
+}
+
+
+template < >
+void
+Messenger::send< message::Select_Start >( message::Select_Start const & )
+{
+    m_display->start_selection( );
+    m_pointer_handler->set_selecting( true );
+}
+
+
+template < >
+void
+Messenger::send< message::Select_Cancel >( message::Select_Cancel const & )
+{
+    m_display->cancel_selection( );
+    m_pointer_handler->set_selecting( false );
+}
+
+
+template < >
+void
+Messenger::send< message::Select_Tap >( message::Select_Tap const & mess )
+{
+    // Selection was cancelled in the meantime (e.g. by new output): treat
+    // the tap as a normal one
+
+    if ( ! m_display->selecting( ) )
+    {
+        m_pointer_handler->set_selecting( false );
+        send( message::Screen_Tap( ) );
+        return;
+    }
+
+    std::string text;
+
+    if ( m_display->select_tap( mess.x, mess.y, text ) )
+    {
+        if ( ! text.empty( ) )
+            m_clipboard = text;
+        m_pointer_handler->set_selecting( false );
+    }
+}
+
+
+template < >
+void
+Messenger::send< message::Select_Drag >( message::Select_Drag const & mess )
+{
+    if ( ! m_display->selecting( ) )
+    {
+        m_pointer_handler->set_selecting( false );
+        return;
+    }
+
+    std::string text;
+
+    if ( m_display->select_range( mess.x1, mess.y1, mess.x2, mess.y2, text ) )
+    {
+        if ( ! text.empty( ) )
+            m_clipboard = text;
+        m_pointer_handler->set_selecting( false );
+    }
+}
+
+
+template < >
+void
+Messenger::send< message::Paste >( message::Paste const & )
+{
+    m_display->scroll_to_bottom( );
+    m_term->input( m_clipboard );
 }
 
 
@@ -392,13 +574,8 @@ bool
 Messenger::GetMenuRect( imenu * menu,
                         irect & rect )
 {
-    if ( m_GetMenuRect )
-    {
-        rect = m_GetMenuRect( menu );
-        return true;
-    }
-
-    return false;
+    rect = ::GetMenuRect( menu );
+    return true;
 }
 
 
@@ -410,12 +587,14 @@ Messenger::GetMenuRect( imenu * menu,
 bool
 Messenger::GetTouchInfo( iv_mtinfo mtinfo[ 2 ] )
 {
-    iv_mtinfo * mti;
+    iv_mtinfo * a = GetTouchInfoI( 0 ),
+              * b = GetTouchInfoI( 1 );
 
-    if ( ! m_GetTouchInfo || ! ( mti = m_GetTouchInfo( ) ) )
+    if ( ! a || ! b )
         return false;
 
-    memcpy( mtinfo, mti, 2 * sizeof *mti );
+    mtinfo[ 0 ] = *a;
+    mtinfo[ 1 ] = *b;
     return true;
 }
 
@@ -429,13 +608,7 @@ Messenger::GetTouchInfo( iv_mtinfo mtinfo[ 2 ] )
 void
 Messenger::load_unsupported_functions( )
 {
-    if ( ! ( m_inkview_handle = dlopen( "libinkview.so", RTLD_LAZY ) ) )
-        return;
-
-    m_GetMenuRect = reinterpret_cast< GetMenuRect_t >(
-                                   dlsym( m_inkview_handle, "GetMenuRect" ) );
-    m_GetTouchInfo = reinterpret_cast< GetTouchInfo_t >(
-                                   dlsym( m_inkview_handle, "GetTouchInfo" ) );
+    // Nothing to do anymore: SDK 6.x declares these functions directly
 }
 
 

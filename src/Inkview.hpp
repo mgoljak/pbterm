@@ -32,44 +32,12 @@
 #include "inkview.h"
 
 
-// Event to be evaluated during multi-touch guestures
-
-#define EVT_MTSYNC  39
-
-
-// Typedef for the signature of the GetMenuRect() function
+// SDK 6.x inkview.h already provides EVT_MTSYNC, iv_mtinfo, GetMenuRect(),
+// GetTouchInfoI() and a complete ISPOINTEREVENT(). Only these typedefs are
+// kept so Messenger.hpp keeps compiling unchanged.
 
 typedef irect ( * GetMenuRect_t )( imenu const * );
-
-
-// Structure returned by the GetTouchInfo() function
-
-typedef struct iv_mtinfo_s {
-    int active;
-    int x;
-    int y;
-    int pressure;
-    int rsv_1;
-    int rsv_2;
-} iv_mtinfo;
-
-
-// Typedef for the signature of the GetTouchInfo() function
-
 typedef iv_mtinfo * ( * GetTouchInfo_t )( void );
-
-
-// ISPOINTEREVENT is missing two new types of events, so redefine it
-
-#if defined ISPOINTEREVENT
-#undef ISPOINTEREVENT
-#endif
-
-#define ISPOINTEREVENT( x )             \
-   (    ( ( x ) >= 29 && ( x ) <= 31 )  \
-     || ( ( x ) >= 34 && ( x ) <= 35 )  \
-     || ( x ) == 39                     \
-     || ( x ) == 44 )
 
 
 // The T and TF macros in inkview.h are an abomination since their names are

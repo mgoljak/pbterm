@@ -57,6 +57,50 @@ struct message
     };
 
 
+    // Messages for selecting text on the screen, copying and pasting it
+
+    struct Select_Start  { };
+
+    struct Screen_Tap    { };
+
+    struct Select_Cancel { };
+
+    struct Paste         { };
+
+    struct Select_Drag
+    {
+        Select_Drag( int x1_, int y1_, int x2_, int y2_ )
+            : x1( x1_ ), y1( y1_ ), x2( x2_ ), y2( y2_ )
+        { }
+
+        int x1, y1, x2, y2;
+    };
+
+    struct Select_Tap
+    {
+        Select_Tap( int x_, int y_ )
+            : x( x_ ), y( y_ )
+        { }
+
+        int x, y;
+    };
+
+
+    // Text typed on the on-screen keyboard that is to be put on the shell's
+    // command line without pressing <ENTER>. If 'replace' is set the
+    // line is cleared first (^U).
+
+    struct Raw_Input
+    {
+        Raw_Input( std::string const & text_, bool replace_ )
+            : text( text_ ), replace( replace_ )
+        { }
+
+        std::string const & text;
+        bool                replace;
+    };
+
+
     // Message sent to request a vertical shift of the display
 
     struct Shift_Display
@@ -138,6 +182,18 @@ struct message
     // Message sent when the user requests to switch recording on or off
 
     struct Toggle_Recording { };
+
+
+    // Message sent when a tap happened in the extra keys area
+
+    struct Extra_Key_Tap
+    {
+        Extra_Key_Tap( int x_, int y_ )
+            : x( x_ ), y( y_ )
+        { }
+
+        int x, y;
+    };
 
 
     // Message sent when the keyboard is to be shown

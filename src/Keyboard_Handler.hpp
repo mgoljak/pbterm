@@ -43,7 +43,14 @@ class Keyboard_Handler
 
 
     void
-    show( std::string const & default_command );
+    show( std::string const & default_command,
+          bool                 replace_line = false );
+
+
+    // True if text typed is put on the command line without <ENTER>
+
+    bool
+    live( ) const  { return m_live; }
 
 
     int
@@ -72,6 +79,11 @@ class Keyboard_Handler
     // Flag, set while keynoard is displayed
 
     bool m_keyboard_is_shown;
+
+    // Text goes to the command line without <ENTER> / replaces the line
+
+    bool m_live,
+         m_replace;
 
 
     // Buffer for keyboard input. Note: since UTF-8 characters seem to be

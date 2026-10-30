@@ -44,6 +44,8 @@ class Pointer_Handler
         , m_in_pinch( false )
         , m_display_width( ScreenWidth( ) )
         , m_display_height( ScreenHeight( ) )
+        , m_bar_top( ScreenHeight( ) )
+        , m_selecting( false )
     { }
 
 
@@ -58,6 +60,19 @@ class Pointer_Handler
     void
     display_size_change( int width,
                          int height );
+
+
+    // Top of the extra keys area (the display height if there is none)
+
+    void
+    set_bar_top( int y )  { m_bar_top = y; }
+
+
+    // While text is being selected taps go to the selection, not to the
+    // keyboard or the corner buttons
+
+    void
+    set_selecting( bool yes_no )  { m_selecting = yes_no; }
 
 
   private :
@@ -152,6 +167,14 @@ class Pointer_Handler
 
     int m_display_width,
         m_display_height;
+
+    // y-position where the extra keys area starts
+
+    int m_bar_top;
+
+    // Set while the user is selecting text
+
+    bool m_selecting;
 };
 
 

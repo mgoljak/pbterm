@@ -107,6 +107,26 @@ class Config
     keyboard_file( ) const  { return m_keyboard_file; }
 
 
+    // If set text from the keyboard is put on the command line without
+    // <ENTER> (use the ENTER key then), otherwise <ENTER> is added
+
+    bool
+    live_input( ) const  { return m_live_input != 0; }
+
+
+    // If set a keyboard is drawn on the screen and typing goes straight to
+    // the terminal, otherwise the system's "Enter shell command" box is used
+
+    bool
+    onscreen_keyboard( ) const  { return m_onscreen_kbd != 0; }
+
+
+    // Returns the layout of the extra keys row (empty: no extra keys)
+
+    std::string const &
+    extra_keys( ) const  { return m_extra_keys; }
+
+
     Logger &
     logger( )  { return m_logger; }
 
@@ -141,6 +161,12 @@ class Config
 
     void
     checked_keyboard_file( );
+
+
+    // Reads the layout of the extra keys row
+
+    void
+    checked_extra_keys( );
 
 
     // Checks the file name with default commands
@@ -248,6 +274,21 @@ class Config
     // File for commonly used commands
 
     std::string m_user_cmd_file;
+
+
+    // On-screen keyboard
+
+    int m_onscreen_kbd;
+
+
+    // Text from the keyboard without automatic <ENTER>
+
+    int m_live_input;
+
+
+    // Layout of the extra keys row
+
+    std::string m_extra_keys;
 };
 
 
