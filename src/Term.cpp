@@ -1090,6 +1090,8 @@ Term::setup_child( std::string const & slave_name,
 
     // Finally replace the process by the shell
 
+    setenv( "PS1", "\\W \\$ ", 1 );
+
     execlp( shell.c_str( ), shell.c_str( ), "-i", ( char * ) 0 );
 }
 
@@ -1175,6 +1177,8 @@ Term::start_piped_shell( std::string const & shell )
         setenv( "LINES", num, 1 );
 
         // Start the shell, replacing the child process
+
+        setenv( "PS1", "\\W \\$ ", 1 );
 
         execlp( shell.c_str( ), shell.c_str( ), "-i", NULL );
         exit( 1 );
