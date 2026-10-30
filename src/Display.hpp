@@ -153,6 +153,8 @@ class Display
     void
     shift( int amount );
 
+    void
+    scroll_page( int dir);
 
     void
     rotate( int dir );

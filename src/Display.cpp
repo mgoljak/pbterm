@@ -1035,6 +1035,19 @@ Display::shift( int amount )
         Repaint( );
 }
 
+void
+Display::scroll_page( int dir )
+{
+    if ( ! m_vt )
+        return;
+
+    // Keep one overlapping line between pages.
+    int lines = rows( ) > 1 ? rows( ) - 1 : 1;
+
+    // shift() takes pixels: positive moves into older output.
+    shift( ( dir < 0 ? lines : -lines ) * m_cell_h );
+}
+
 
 /***************************************
  * Called when the user asks for a different orientation

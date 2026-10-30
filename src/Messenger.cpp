@@ -195,16 +195,32 @@ Messenger::send< message::New_Command >( message::New_Command const & mess )
 
 template < >
 void
-Messenger::send< message::Extra_Key_Tap >( message::Extra_Key_Tap const & mess )
+Messenger::send< message::Extra_Key_Tap >(
+                                  message::Extra_Key_Tap const & mess )
 {
     std::string bytes( m_display->extra_key_tap( mess.x, mess.y ) );
 
-    // Showing, hiding or changing the keyboard changes the terminal size
-
+    // Showing, hiding or changing the keyboard changes the terminal size.
     if ( m_display->take_geometry_changed( ) )
     {
         m_term->set_winsize( m_display->cols( ), m_display->rows( ) );
         m_pointer_handler->set_bar_top( m_display->bar_top( ) );
+    }
+
+    // With pipes, use Page Up/Down to browse terminal output locally.
+    if ( ! m_term->using_pty( ) )
+    {
+        if ( bytes == "\033[5~" )       // PGUP
+        {
+            m_display->scroll_page( -1 );
+            return;
+        }
+
+        if ( bytes == "\033[6~" )       // PGDN
+        {
+            m_display->scroll_page( +1 );
+            return;
+        }
     }
 
     if ( ! bytes.empty( ) )
