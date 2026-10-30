@@ -617,11 +617,21 @@ Term::input( std::string const & data )
                     while ( m_line_pos > 0 )
                         line_move( -1 );
                 }
+
                 else if ( c == 'F' )
                 {
                     // END: move to the end of the command.
                     while ( m_line_pos < m_line.size( ) )
                         line_move( +1 );
+                }
+                else if ( m_esc == "\033[3~" )
+                {
+                    // DEL: delete the character immediately after the cursor.
+                    if ( m_line_pos < m_line.size( ) )
+                    {
+                        line_move( +1 );
+                        line_backspace( );
+                    }
                 }
             }
 
