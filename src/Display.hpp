@@ -164,7 +164,6 @@ class Display
     void
     suspend_redraws( bool stop );
 
-
     void
     recording_state_change( bool state );
 

@@ -311,6 +311,7 @@ void
 Messenger::send< message::Set_Orientation >(
                                         message::Set_Orientation const & mess )
 {
+    m_logger->info( ) << "Set_Orientation dir " << mess.dir << std::endl;
     m_display->rotate( mess.dir );
     m_term->set_winsize( m_display->cols( ), m_display->rows( ) );
     m_pointer_handler->display_size_change( ScreenWidth( ),
@@ -329,7 +330,11 @@ template < >
 void
 Messenger::send< message::Show_Rotate_Box >( message::Show_Rotate_Box const & )
 {
-    m_rotation_handler->show( );
+    int next = ( GetOrientation( ) + 1 ) % 4;
+
+    m_logger->info( ) << "Rotate: " << GetOrientation( )
+                      << " -> " << next << std::endl;
+    send( message::Set_Orientation( next ) );
 }
 
 
@@ -514,13 +519,21 @@ Messenger::send< request::Handle_Event >( request::Handle_Event & req )
         m_display->redraw( );
         req.result = 1;
     }
+    else if ( req.type == EVT_ORIENTATION )
+    {
+        m_logger->info( ) << "EVT_ORIENTATION " << req.par1 << std::endl;
+        send( message::Set_Orientation( req.par1 ) );
+        req.result = 1;
+    }
     else if ( ISKEYEVENT( req.type ) )
         req.result = m_button_handler->handle( req.type, req.par1, req.par2 );
     else if ( ISPOINTEREVENT( req.type ) )
         req.result = m_pointer_handler->handle( req.type, req.par1, req.par2 );
+    else
+        m_logger->info( ) << "event " << req.type << " " << req.par1
+                          << " " << req.par2 << std::endl;
     return req;
 }
-
 
 /******************************************
  * Receives the "Get Command List" request to obtain a list of all
