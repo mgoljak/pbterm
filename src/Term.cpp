@@ -409,8 +409,44 @@ Term::line_complete( )
 
     std::size_t sp = m_line.find_last_of( ' ' );
     bool first = sp == std::string::npos;
-    std::string word = first ? m_line : m_line.substr( sp + 1 ),
-                dir_part,
+
+    std::string word = first ? m_line : m_line.substr( sp + 1 );
+
+    // Recognize an assignment such as MOJA_VER=/mnt/ext1/fol.
+    std::size_t eq = word.find( '=' );
+
+    if ( eq != std::string::npos && eq > 0 )
+    {
+        // A shell variable name starts with a letter or underscore,
+        // followed by letters, digits or underscores.
+        bool assignment = true;
+
+        for ( std::size_t i = 0; i < eq; ++i )
+        {
+            char c = word[ i ];
+
+            bool letter = ( c >= 'a' && c <= 'z' )
+                       || ( c >= 'A' && c <= 'Z' )
+                       || c == '_';
+
+            bool digit = c >= '0' && c <= '9';
+
+            if ( ! letter && ! ( i > 0 && digit ) )
+            {
+                assignment = false;
+                break;
+            }
+        }
+
+        if ( assignment )
+        {
+            // Complete only the value, keeping NAME= in m_line.
+            word.erase( 0, eq + 1 );
+            first = false;
+        }
+    }
+
+    std::string dir_part,
                 base = word;
 
     std::size_t sl = word.rfind( '/' );
